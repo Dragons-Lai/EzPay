@@ -11,7 +11,11 @@
 #include <queue>
 #include <vector>
 #include <string>
-#include <unistd.h>
+#include <errno.h>
+#include <resolv.h>
+#include "openssl/ssl.h"
+#include "openssl/err.h"
+#define FAIL    -1
 
 using namespace std;
 
@@ -21,6 +25,62 @@ const int thread_number = 10;
 class Client;
 struct User;
 struct UserList;
+
+SSL_CTX* InitServerCTX(void)
+{
+    const SSL_METHOD *method;
+    SSL_CTX *ctx;
+    OpenSSL_add_all_algorithms();  /* load & register all cryptos, etc. */
+    SSL_load_error_strings();   /* load all error messages */
+    method = TLS_server_method();  /* create new server-method instance */
+    ctx = SSL_CTX_new(method);   /* create new context from method */
+    if ( ctx == NULL )
+    {
+        ERR_print_errors_fp(stderr);
+        abort();
+    }
+    return ctx;
+}
+void LoadCertificates(SSL_CTX* ctx, char* CertFile, char* KeyFile)
+{
+    /* set the local certificate from CertFile */
+    if ( SSL_CTX_use_certificate_file(ctx, CertFile, SSL_FILETYPE_PEM) <= 0 )
+    {
+        ERR_print_errors_fp(stderr);
+        abort();
+    }
+    /* set the private key from KeyFile (may be the same as CertFile) */
+    if ( SSL_CTX_use_PrivateKey_file(ctx, KeyFile, SSL_FILETYPE_PEM) <= 0 )
+    {
+        ERR_print_errors_fp(stderr);
+        abort();
+    }
+    /* verify private key */
+    if ( !SSL_CTX_check_private_key(ctx) )
+    {
+        fprintf(stderr, "Private key does not match the public certificate\n");
+        abort();
+    }
+}
+void ShowCerts(SSL* ssl)
+{
+    X509 *cert;
+    char *line;
+    cert = SSL_get_peer_certificate(ssl); /* Get certificates (if available) */
+    if ( cert != NULL )
+    {
+        printf("Server certificates:\n");
+        line = X509_NAME_oneline(X509_get_subject_name(cert), 0, 0);
+        printf("Subject: %s\n", line);
+        free(line);
+        line = X509_NAME_oneline(X509_get_issuer_name(cert), 0, 0);
+        printf("Issuer: %s\n", line);
+        free(line);
+        X509_free(cert);
+    }
+    else
+        printf("No certificates.\n");
+}
 
 // 判別user輸入的指令類別為何(有Register/Login/List/Exit共四種)
 char* Command_type(char* command) {
@@ -52,21 +112,21 @@ class Client
 {
 public:
     char *c_IP;
-    int c_sockfd;
+    SSL* c_ssl;
     Client();
-    Client(char *IP, int sockfd);
+    Client(char *IP, SSL* ssl);
 };
 
 Client::Client()
 {
     this->c_IP = new char[MAX_LEN];
-    this->c_sockfd = 0;
+    // this->c_sockfd = 0;
 }
 
-Client::Client(char *IP, int sockfd)
+Client::Client(char *IP, SSL* ssl)
 {
     this->c_IP = IP;
-    this->c_sockfd = sockfd;
+    this->c_ssl = ssl;
 }
 
 struct User
@@ -224,13 +284,17 @@ void* work(void *x) {
         cout << "Successfully assign a thread to serve the client!\n";
         bool havelogin = false;
         string myName = "";
+        // ssh
+        SSL* ssl = aClient.c_ssl;
+        int sd, bytes;
+
         while (true) {
             char command[MAX_LEN] = {};
             memset(command, '\0', sizeof(command));
-            recv(aClient.c_sockfd,command,sizeof(command),0);
+            // recv(aClient.c_sockfd,command,sizeof(command),0);
+            bytes = SSL_read(ssl, command, sizeof(command)); /* get request */
+            command[bytes] = '\0';            
             cout << "client message: " << command << "\n";
-            // if(strcmp(command, "\n") == 0)
-            //     continue;
             char* CommandType = Command_type(command);
             char s_msg[MAX_LEN] = {};
             memset(s_msg, '\0', sizeof(s_msg));
@@ -249,18 +313,21 @@ void* work(void *x) {
                     User* aUser = new User(money, name, aClient.c_IP, "", false); //要login後才有port number，故先設""。
                     UL.usersList_ptr.push_back(aUser);
                     sprintf(s_msg, "%s", "100 OK\n");
-                    send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
+                    // send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
+                    SSL_write(ssl, s_msg, strlen(s_msg)); /* send reply */
                 }
                 else {
-                    sprintf(s_msg, "%s", "210 Fail\n");
-                    send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
+                    sprintf(s_msg, "%s", "Please not register twice!\n");
+                    // send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
+                    SSL_write(ssl, s_msg, strlen(s_msg)); /* send reply */
                 }
             }
 
             else if(strcmp(CommandType, "Login") == 0){
                 if(havelogin) {
                     strcpy(s_msg, "Please not log in twice!\n");
-                    send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
+                    // send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
+                    SSL_write(ssl, s_msg, strlen(s_msg)); /* send reply */
                     cout << "server message: " << s_msg << "\n";                   
                     continue;
                 }
@@ -273,11 +340,13 @@ void* work(void *x) {
                 User *userPtr = UL.findUser(myName);
                 if(userPtr == nullptr) {
                     sprintf(s_msg, "%s", "Please register first!\n");
-                    send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
+                    // send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
+                    SSL_write(ssl, s_msg, strlen(s_msg)); /* send reply */
                 }
                 else if(userPtr->online) {
                     sprintf(s_msg, "%s", "You have already logged in other place!\n");
-                    send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
+                    // send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
+                    SSL_write(ssl, s_msg, strlen(s_msg)); /* send reply */
                 }
                 else {
                     havelogin = true;
@@ -293,7 +362,8 @@ void* work(void *x) {
                     strcat(s_msg, "\n");
                     sprintf(temp, "%s", UL.onlineList());
                     strcat(s_msg, temp);
-                    send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
+                    // send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
+                    SSL_write(ssl, s_msg, strlen(s_msg)); /* send reply */
                 }
             }
 
@@ -309,7 +379,8 @@ void* work(void *x) {
                 strcat(s_msg, "\n");
                 sprintf(temp, "%s", UL.onlineList());
                 strcat(s_msg, temp);
-                send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
+                // send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
+                SSL_write(ssl, s_msg, strlen(s_msg)); /* send reply */
             }
 
             else if(strcmp(CommandType, "Exit") == 0){
@@ -318,16 +389,21 @@ void* work(void *x) {
                 userPtr->setPort("");
                 userPtr->setIP("");
                 strcpy(s_msg, "Bye!\n");
-                send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
+                // send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
+                SSL_write(ssl, s_msg, strlen(s_msg)); /* send reply */
                 cout << "server message: " << s_msg << "\n";
                 break;
             }
             else if(strcmp(CommandType, "Unknown Command") == 0) {
                 strcpy(s_msg, "Try Again!\n");
-                send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
+                // send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
+                SSL_write(ssl, s_msg, strlen(s_msg)); /* send reply */
             }
-            cout << "server message: " << s_msg << "\n";
+            cout << "server message: " << s_msg << "\n";     
         }
+        sd = SSL_get_fd(ssl);       /* get socket connection */
+        SSL_free(ssl);         /* release SSL state */
+        close(sd);          /* close connection */   
     }
 }
 
@@ -358,6 +434,13 @@ int main(int argc, char *argv[]) {
     {
         pthread_create(&(threads[i]), NULL, work, NULL);
     }
+    //ssh
+    SSL_CTX *ctx;
+    SSL_library_init();
+    ctx = InitServerCTX();        /* initialize SSL */
+    char path[200] = {};
+    strcpy(path, "mycert.pem");
+    LoadCertificates(ctx, path, path); /* load certs */    
 
     int forClientSockfd = 0;
     struct sockaddr_in clientInfo;
@@ -365,18 +448,28 @@ int main(int argc, char *argv[]) {
     cout << "Waiting for connection!\n";
     while(1){
         forClientSockfd = accept(sockfd,(struct sockaddr*) &clientInfo, &addrlen);
+        // ssh
+        SSL *ssl;
+        ssl = SSL_new(ctx); 
+        SSL_set_fd(ssl, forClientSockfd); 
+        if ( SSL_accept(ssl) == FAIL )     /* do SSL-protocol accept */
+            ERR_print_errors_fp(stderr);
+        else
+            ShowCerts(ssl);
+
         if(forClientSockfd == -1) {
             printf("error on accepting\n");
         }
         else {
             char message[] = {"Connection accepted.\n"};
-            send(forClientSockfd, message, sizeof(message), 0);
+            SSL_write(ssl, message, strlen(message)); /* send reply */
         }
         struct sockaddr_in *pV4Addr = (struct sockaddr_in *)&forClientSockfd;
+        //以下四行用以取得該client的IP address
         struct in_addr ipAddr = pV4Addr->sin_addr;
         char client_ip_addr[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &ipAddr, client_ip_addr, INET_ADDRSTRLEN);
-        Client client(client_ip_addr, forClientSockfd);
+        Client client(client_ip_addr, ssl);
         qc.push(client);
     }
     return 0;

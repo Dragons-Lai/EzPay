@@ -7,13 +7,55 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/wait.h>
-#include <sys/types.h>
 #include <iostream>
 #include <string>
+#include <errno.h>
+// #include <malloc.h>
+#include <resolv.h>
+#include <netdb.h>
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#define FAIL    -1
 using namespace std;
-
-
+    
 const int LEN = 200;
+
+SSL_CTX* InitCTX(void)
+{
+    const SSL_METHOD *method;
+    SSL_CTX *ctx;
+    OpenSSL_add_all_algorithms();  /* Load cryptos, et.al. */
+    SSL_load_error_strings();   /* Bring in and register error messages */
+    method = TLS_client_method();  /* Create new client-method instance */
+    ctx = SSL_CTX_new(method);   /* Create new context */
+    if ( ctx == NULL )
+    {
+        ERR_print_errors_fp(stderr);
+        abort();
+    }
+    return ctx;
+}
+
+void ShowCerts(SSL* ssl)
+{
+    X509 *cert;
+    char *line;
+    cert = SSL_get_peer_certificate(ssl); /* get the server's certificate */
+    if ( cert != NULL )
+    {
+        printf("Server certificates:\n");
+        line = X509_NAME_oneline(X509_get_subject_name(cert), 0, 0);
+        printf("Subject: %s\n", line);
+        free(line);       /* free the malloc'ed string */
+        line = X509_NAME_oneline(X509_get_issuer_name(cert), 0, 0);
+        printf("Issuer: %s\n", line);
+        free(line);       /* free the malloc'ed string */
+        X509_free(cert);     /* free the malloc'ed certificate copy */
+    }
+    else
+        printf("Info: No client certificates configured.\n");
+}
+
 // 判別user輸入的指令類別為何(有Register/Login/List/Transaction/Exit共五種)
 char* Command_type(char* command) {
     char* p1 = strchr(command, '#');
@@ -120,10 +162,29 @@ int main(int argc , char *argv[])
         printf("Connection error");
         return 0;
     }
+
+    // SSL
+    SSL_CTX *ctx;
+    SSL *ssl;
+    int bytes;
+    SSL_library_init();
+    ctx = InitCTX();
+    ssl = SSL_new(ctx);      /* create new SSL connection state */
+    SSL_set_fd(ssl, sockfd);    /* attach the socket descriptor */
+    if ( SSL_connect(ssl) == FAIL )   /* perform the connection */
+        ERR_print_errors_fp(stderr);
+    else {
+        printf("\n\nConnected with %s encryption\n", SSL_get_cipher(ssl));
+        ShowCerts(ssl);        /* get any certs */        
+    }
+
     // 接收server回傳的第一筆訊息(Connection accepted!)
     char receiveConnect[LEN] = {};
-    recv(sockfd, receiveConnect, sizeof(receiveConnect), 0);
-    printf("%s", receiveConnect);
+    // recv(sockfd, receiveConnect, sizeof(receiveConnect), 0);
+    bytes = SSL_read(ssl, receiveConnect, sizeof(receiveConnect)); /* get reply & decrypt */
+    receiveConnect[bytes] = 0;
+    printf("Received: %s\n", receiveConnect);
+    // printf("%s", receiveConnect);
     
     // client與server進行資料的傳輸(雙向)
     int my_port = -1;
@@ -132,13 +193,8 @@ int main(int argc , char *argv[])
         // 使用者可用鍵盤輸入要傳給server的訊息
         char command[LEN] = {};
         char receiveMessage[LEN] = {};
-        // fgets(command, LEN, stdin); // The last char is '\n'
         cin.getline(command, sizeof(char)*LEN);
         
-        // char* p = strchr(command, '\n');
-        // if(p != nullptr){
-        //     *p = '\0';
-        // }
         // 判別使用者輸入的訊息屬於何種指令類別
         char* CommandType = Command_type(command);
         // 若為Transaction，則payer的socket與payee's child process的socket建立TCP連線
@@ -146,8 +202,12 @@ int main(int argc , char *argv[])
             // 跟server要使用者清單(內有payee的port)
             char listReq[LEN] = {};
             strcpy(listReq, "List");
-            send(sockfd,listReq,sizeof(listReq),0);
-            recv(sockfd, receiveMessage, sizeof(receiveMessage),0);
+            // send(sockfd,listReq,sizeof(listReq),0);
+            // recv(sockfd, receiveMessage, sizeof(receiveMessage),0);
+            SSL_write(ssl,listReq, strlen(listReq));   /* encrypt & send message */
+            bytes = SSL_read(ssl, receiveMessage, sizeof(receiveMessage)); /* get reply & decrypt */
+            receiveMessage[bytes] = 0;
+
             // 找到payee的port
             int payeePort = payee_port(command, receiveMessage);
             if(payeePort == 0)
@@ -158,9 +218,15 @@ int main(int argc , char *argv[])
         // 若為其他四種指令類別
         else {
             // 都要先將該指令傳送給server
-            send(sockfd,command,sizeof(command),0);
-            recv(sockfd, receiveMessage, sizeof(receiveMessage),0);
-            printf("%s\n",receiveMessage);
+            // send(sockfd,command,sizeof(command),0);
+            // recv(sockfd, receiveMessage, sizeof(receiveMessage),0);
+            SSL_write(ssl,command, strlen(command));   /* encrypt & send message */
+            bytes = SSL_read(ssl, receiveMessage, sizeof(receiveMessage)); /* get reply & decrypt */
+            receiveMessage[bytes] = 0;
+            printf("Received: %s\n", receiveMessage);
+            // printf("%s\n",receiveMessage);
+
+            
             // 若為Login，則用fork建立該client's child process，然後建立socket實作server(做為payee時可供其他client連線)
             if(strcmp(CommandType, "Login") == 0) {
                 char* p1 = strchr(command, '#');
@@ -212,6 +278,7 @@ int main(int argc , char *argv[])
                 // printf("%s\n","I got here1!");
                 send_message(message, my_port,sizeof(char)*LEN);
                 wait(NULL);
+                SSL_free(ssl);
                 // printf("%s\n","I got here3!");
                 break;
             }
@@ -219,6 +286,7 @@ int main(int argc , char *argv[])
     }
     
     close(sockfd);
+    SSL_CTX_free(ctx);
     
     return 0;
 }
