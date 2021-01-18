@@ -19,7 +19,7 @@
 
 using namespace std;
 
-const int MAX_LEN = 1000;
+const int MAX_LEN = 200;
 const int listen_number = 10;
 const int thread_number = 10;
 class Client;
@@ -103,7 +103,6 @@ char* Command_type(char* command) {
         }
     }
     // cout << "Command: " << command << "\n";
-    // cout << "Command Type: " << Type << "\n";
     
     return Type;
 }
@@ -120,7 +119,7 @@ public:
 Client::Client()
 {
     this->c_IP = new char[MAX_LEN];
-    // this->c_sockfd = 0;
+    this->c_ssl = nullptr;
 }
 
 Client::Client(char *IP, SSL* ssl)
@@ -255,7 +254,7 @@ char* UserList::onlineList() {
     for (int i = 0; i < this->usersList_ptr.size(); i++) {
         if(usersList_ptr[i]->online) {
             strcat(online_list, usersList_ptr[i]->name.c_str());
-            // todo: debug
+            // todo
             strcat(online_list, "#");
             strcat(online_list, usersList_ptr[i]->IP.c_str());
             strcat(online_list, "#");
@@ -272,26 +271,26 @@ pthread_mutex_t mutex1;
 void* work(void *x) {
     while (true)
     {
+        // concurrency control
         usleep(1000000);
         pthread_mutex_lock(&(mutex1));
         if(qc.empty()){
-            pthread_mutex_unlock(&(mutex1));
+            pthread_mutex_unlock(&(mutex1)); 
             continue;
         }
         Client aClient = qc.front();
         qc.pop();
         pthread_mutex_unlock(&(mutex1));
         cout << "Successfully assign a thread to serve the client!\n";
+
+        // SSL/TLS安全通訊
         bool havelogin = false;
         string myName = "";
-        // ssh
         SSL* ssl = aClient.c_ssl;
         int sd, bytes;
-
         while (true) {
             char command[MAX_LEN] = {};
             memset(command, '\0', sizeof(command));
-            // recv(aClient.c_sockfd,command,sizeof(command),0);
             bytes = SSL_read(ssl, command, sizeof(command)); /* get request */
             command[bytes] = '\0';            
             cout << "client message: " << command << "\n";
@@ -313,12 +312,10 @@ void* work(void *x) {
                     User* aUser = new User(money, name, aClient.c_IP, "", false); //要login後才有port number，故先設""。
                     UL.usersList_ptr.push_back(aUser);
                     sprintf(s_msg, "%s", "100 OK\n");
-                    // send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
                     SSL_write(ssl, s_msg, strlen(s_msg)); /* send reply */
                 }
                 else {
                     sprintf(s_msg, "%s", "Please not register twice!\n");
-                    // send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
                     SSL_write(ssl, s_msg, strlen(s_msg)); /* send reply */
                 }
             }
@@ -326,7 +323,6 @@ void* work(void *x) {
             else if(strcmp(CommandType, "Login") == 0){
                 if(havelogin) {
                     strcpy(s_msg, "Please not log in twice!\n");
-                    // send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
                     SSL_write(ssl, s_msg, strlen(s_msg)); /* send reply */
                     cout << "server message: " << s_msg << "\n";                   
                     continue;
@@ -340,12 +336,10 @@ void* work(void *x) {
                 User *userPtr = UL.findUser(myName);
                 if(userPtr == nullptr) {
                     sprintf(s_msg, "%s", "Please register first!\n");
-                    // send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
                     SSL_write(ssl, s_msg, strlen(s_msg)); /* send reply */
                 }
                 else if(userPtr->online) {
                     sprintf(s_msg, "%s", "You have already logged in other place!\n");
-                    // send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
                     SSL_write(ssl, s_msg, strlen(s_msg)); /* send reply */
                 }
                 else {
@@ -362,7 +356,6 @@ void* work(void *x) {
                     strcat(s_msg, "\n");
                     sprintf(temp, "%s", UL.onlineList());
                     strcat(s_msg, temp);
-                    // send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
                     SSL_write(ssl, s_msg, strlen(s_msg)); /* send reply */
                 }
             }
@@ -379,7 +372,6 @@ void* work(void *x) {
                 strcat(s_msg, "\n");
                 sprintf(temp, "%s", UL.onlineList());
                 strcat(s_msg, temp);
-                // send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
                 SSL_write(ssl, s_msg, strlen(s_msg)); /* send reply */
             }
 
@@ -389,14 +381,12 @@ void* work(void *x) {
                 userPtr->setPort("");
                 userPtr->setIP("");
                 strcpy(s_msg, "Bye!\n");
-                // send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
                 SSL_write(ssl, s_msg, strlen(s_msg)); /* send reply */
                 cout << "server message: " << s_msg << "\n";
                 break;
             }
             else if(strcmp(CommandType, "Unknown Command") == 0) {
                 strcpy(s_msg, "Try Again!\n");
-                // send(aClient.c_sockfd, s_msg, strlen(s_msg), 0);
                 SSL_write(ssl, s_msg, strlen(s_msg)); /* send reply */
             }
             cout << "server message: " << s_msg << "\n";     
@@ -434,12 +424,12 @@ int main(int argc, char *argv[]) {
     {
         pthread_create(&(threads[i]), NULL, work, NULL);
     }
-    //ssh
+    // SSL/TLS安全通訊
     SSL_CTX *ctx;
     SSL_library_init();
     ctx = InitServerCTX();        /* initialize SSL */
     char path[200] = {};
-    strcpy(path, "mycert.pem");
+    strcpy(path, "server.pem");
     LoadCertificates(ctx, path, path); /* load certs */    
 
     int forClientSockfd = 0;
@@ -448,7 +438,6 @@ int main(int argc, char *argv[]) {
     cout << "Waiting for connection!\n";
     while(1){
         forClientSockfd = accept(sockfd,(struct sockaddr*) &clientInfo, &addrlen);
-        // ssh
         SSL *ssl;
         ssl = SSL_new(ctx); 
         SSL_set_fd(ssl, forClientSockfd); 
@@ -470,6 +459,7 @@ int main(int argc, char *argv[]) {
         char client_ip_addr[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &ipAddr, client_ip_addr, INET_ADDRSTRLEN);
         Client client(client_ip_addr, ssl);
+
         qc.push(client);
     }
     return 0;

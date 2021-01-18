@@ -10,7 +10,6 @@
 #include <iostream>
 #include <string>
 #include <errno.h>
-// #include <malloc.h>
 #include <resolv.h>
 #include <netdb.h>
 #include <openssl/ssl.h>
@@ -20,7 +19,7 @@ using namespace std;
     
 const int LEN = 200;
 
-SSL_CTX* InitCTX(void)
+SSL_CTX* InitClientCTX(void)
 {
     const SSL_METHOD *method;
     SSL_CTX *ctx;
@@ -95,14 +94,14 @@ int payee_port(char* command, char* user_list) {
     if(p3 != nullptr) {
         char* p4 = strchr(p3, '#');
         char* p5 = strchr(p4+1, '#'); // p5+1為payee的port number(9091)
-        char* p6 = strchr(p5, '\n'); // todo: bug may exists
+        char* p6 = strchr(p5, '\n'); // todo
         if(p6 != nullptr)
             *p6 = '\0';
         cout << "The port number of " << p2+1 << " is " << p5+1 << "\n";
         return atoi(p5+1);
     }
     cout << p2+1 << " is not online!" << "\n";
-    return 0; //若使用者亂打指令這裡會發生bug
+    return 0; //todo
 }
 
 //  建立單次使用的socket，傳送訊息後即關閉
@@ -163,12 +162,12 @@ int main(int argc , char *argv[])
         return 0;
     }
 
-    // SSL
+    // SSL/TLS安全通訊
     SSL_CTX *ctx;
     SSL *ssl;
     int bytes;
     SSL_library_init();
-    ctx = InitCTX();
+    ctx = InitClientCTX();
     ssl = SSL_new(ctx);      /* create new SSL connection state */
     SSL_set_fd(ssl, sockfd);    /* attach the socket descriptor */
     if ( SSL_connect(ssl) == FAIL )   /* perform the connection */
@@ -180,11 +179,9 @@ int main(int argc , char *argv[])
 
     // 接收server回傳的第一筆訊息(Connection accepted!)
     char receiveConnect[LEN] = {};
-    // recv(sockfd, receiveConnect, sizeof(receiveConnect), 0);
     bytes = SSL_read(ssl, receiveConnect, sizeof(receiveConnect)); /* get reply & decrypt */
     receiveConnect[bytes] = 0;
     printf("Received: %s\n", receiveConnect);
-    // printf("%s", receiveConnect);
     
     // client與server進行資料的傳輸(雙向)
     int my_port = -1;
@@ -197,13 +194,12 @@ int main(int argc , char *argv[])
         
         // 判別使用者輸入的訊息屬於何種指令類別
         char* CommandType = Command_type(command);
+
         // 若為Transaction，則payer的socket與payee's child process的socket建立TCP連線
         if(strcmp(CommandType, "Transaction") == 0) {
             // 跟server要使用者清單(內有payee的port)
             char listReq[LEN] = {};
             strcpy(listReq, "List");
-            // send(sockfd,listReq,sizeof(listReq),0);
-            // recv(sockfd, receiveMessage, sizeof(receiveMessage),0);
             SSL_write(ssl,listReq, strlen(listReq));   /* encrypt & send message */
             bytes = SSL_read(ssl, receiveMessage, sizeof(receiveMessage)); /* get reply & decrypt */
             receiveMessage[bytes] = 0;
@@ -218,14 +214,10 @@ int main(int argc , char *argv[])
         // 若為其他四種指令類別
         else {
             // 都要先將該指令傳送給server
-            // send(sockfd,command,sizeof(command),0);
-            // recv(sockfd, receiveMessage, sizeof(receiveMessage),0);
             SSL_write(ssl,command, strlen(command));   /* encrypt & send message */
             bytes = SSL_read(ssl, receiveMessage, sizeof(receiveMessage)); /* get reply & decrypt */
             receiveMessage[bytes] = 0;
             printf("Received: %s\n", receiveMessage);
-            // printf("%s\n",receiveMessage);
-
             
             // 若為Login，則用fork建立該client's child process，然後建立socket實作server(做為payee時可供其他client連線)
             if(strcmp(CommandType, "Login") == 0) {
@@ -261,7 +253,6 @@ int main(int argc , char *argv[])
                         recv(forClientSockfd2,inputBuffer,sizeof(inputBuffer),0);
                         printf("Received Messages: %s\n",inputBuffer);
                         if(strcmp(inputBuffer, "Exit") == 0) {
-                            // printf("%s\n","I got here2!");
                         	close(forClientSockfd2);
                             break;
                         }
@@ -275,16 +266,13 @@ int main(int argc , char *argv[])
             else if(strcmp(CommandType, "Exit") == 0) {
                 char message[LEN] = {};
                 strcpy(message, "Exit");
-                // printf("%s\n","I got here1!");
                 send_message(message, my_port,sizeof(char)*LEN);
                 wait(NULL);
-                SSL_free(ssl);
-                // printf("%s\n","I got here3!");
                 break;
             }
         }
     }
-    
+    SSL_free(ssl);
     close(sockfd);
     SSL_CTX_free(ctx);
     
