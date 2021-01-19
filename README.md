@@ -11,8 +11,8 @@
 [OpenSSL@1.1.1i](https://www.openssl.org/)
 
 ### 【執行server/client程式(編譯後的執行檔)】
-輸入指令: ./server <port of the server>\
-輸入指令: ./client <IP address of the server> <port of the server>
+輸入指令: ./server \<port of the server\> \
+輸入指令: ./client \<IP address of the server\> \<port of the server\>
 
 ### 【程式架構】
 Server透過multi-thread實作Thread Pool，與到達的Client建立SSL/TLS連線，並進行一問一答(雙向傳輸)。
