@@ -8,7 +8,7 @@
 可在macOS中運行。
 
 ### 【套件版本】
-OpenSSL@1.1.1i 
+[OpenSSL@1.1.1i](https://www.openssl.org/)
 
 ### 【執行server/client程式(編譯後的執行檔)】
 輸入指令: ./server <port of the server>
