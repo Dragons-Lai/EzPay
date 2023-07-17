@@ -1,21 +1,18 @@
-# OpenSSL_Program＿說明文件
+# OpenSSL_Program_Documentation
 
-### 【如何編譯】
-1. 開啟terminal移動到檔案所在的資料夾
-2. 使用「make」指令即可成功編譯
-
-### 【程式需求執行環境】
-可在macOS中運行。
-
-### 【套件版本】
+### Package Version
 [OpenSSL@1.1.1i](https://www.openssl.org/)
 
-### 【執行server/client程式(編譯後的執行檔)】
-輸入指令: ./server \<port of the server\> \
-輸入指令: ./client \<IP address of the server\> \<port of the server\>
+### Compilation Instructions
+1. Open the terminal and navigate to the `./OpenSSL_Program` directory.
+2. Execute the `make` command to compile the program.
 
-### 【程式架構】
-Server透過multi-thread實作Thread Pool，與到達的Client建立SSL/TLS連線，並進行一問一答(雙向傳輸)。
-除此之外，client也會透過fork()建立child process，與其他client建立socket會談，並接受訊息（單向傳輸）。
+### Program Execution Instructions
+Enter the following command to start the server: `./server ${server port}` \
+Enter the following command to start the client: `./client ${server IP address} ${server port}`
+
+### Program Architecture
+The server employs multi-threading to create a thread pool, sets up an SSL/TLS connection with incoming clients, and performs a question-and-answer interaction. Additionally, the client generates child processes using the fork() system call, and sets up socket connections with other clients.
+
 ![entrance_UI](./Architecture.png)
 
